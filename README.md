@@ -14,8 +14,8 @@ A Streamlit web application that extracts portfolio holdings data from Empower r
 
 1. Clone this repository:
    ```bash
-   git clone <repository-url>
-   cd <repository-directory>
+   git clone https://github.com/yourusername/empower-portfolio-extractor.git
+   cd empower-portfolio-extractor
    ```
 
 2. Install the required dependencies:
