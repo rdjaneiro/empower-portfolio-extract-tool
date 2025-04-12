@@ -1,7 +1,7 @@
-# Use the official Python image from the Docker Hub
+# Use Python 3.11 slim image
 FROM python:3.11-slim
 
-# Set the working directory for production
+# Set working directory
 WORKDIR /app
 
 # Install system dependencies
@@ -12,9 +12,13 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Split numpy installation from the rest
+# Install numpy first (as it's a common dependency that other packages might need)
 RUN pip install --no-cache-dir numpy
-# Then install the rest of the requirements
+
+# Copy requirements file first for better layer caching
+COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create non-root user for better security
@@ -25,7 +29,7 @@ ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME
 
-# Copy the application code
+# Copy the rest of the application
 COPY . .
 
 # Create directory for user files with appropriate permissions
@@ -37,6 +41,6 @@ USER $USERNAME
 # Expose the port for Streamlit
 EXPOSE 8505
 
-# Start Streamlit when the container launches
-CMD ["streamlit", "run", "finTools_app.py", "--server.port=8505", "--server.address=0.0.0.0"]
+# Command to run when container starts
+CMD ["streamlit", "run", "finTools_app.py"]
 

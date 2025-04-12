@@ -15,9 +15,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""
 
-"""
 # Empower Portfolio WebArchive Extractor
 =======================================
 
@@ -51,7 +49,14 @@ and CSV format for further analysis.
 - read_empower_webarchive: Custom module for webarchive processing
 
 """
+
+# First, import streamlit
 import streamlit as st
+
+# Set page config must be the first Streamlit command
+st.set_page_config(page_title="Empower Portfolio Extractor", layout="wide")
+
+# Now import all other modules
 import os
 import glob
 import pandas as pd
@@ -61,6 +66,28 @@ import tempfile
 import uuid
 import time
 import datetime
+
+# Add this import at the top of the file with the other imports
+import plotly.express as px
+
+# Add these imports at the top of the file with other imports
+import plotly.graph_objects as go
+import plotly.figure_factory as ff
+import numpy as np
+
+# Import functions from the read_empower_webarchive script after other standard imports
+from read_empower_webarchive import (
+    extract_webarchive_text,
+    extract_portfolio_holdings,
+    save_holdings_to_csv,
+    format_holdings_as_text
+)
+
+# Initialize session state variables
+if 'processed_result' not in st.session_state:
+    st.session_state.processed_result = None
+if 'processed_file_path' not in st.session_state:
+    st.session_state.processed_file_path = None
 
 # Add user_id management - put this after imports but before other functions
 def ensure_user_dirs():
@@ -127,23 +154,6 @@ def cleanup_old_sessions():
 def ensure_user_files_dir():
     """Get the user-specific directory path"""
     return ensure_user_dirs()
-
-# Import functions from the read_empower_webarchive script
-from read_empower_webarchive import (
-    extract_webarchive_text,
-    extract_portfolio_holdings,
-    save_holdings_to_csv,
-    format_holdings_as_text
-)
-
-# Set page config - must be the first Streamlit command
-st.set_page_config(page_title="Empower Portfolio Extractor", layout="wide")
-
-# Add these lines right after the st.set_page_config line
-if 'processed_result' not in st.session_state:
-    st.session_state.processed_result = None
-if 'processed_file_path' not in st.session_state:
-    st.session_state.processed_file_path = None
 
 def get_available_webarchive_files():
     """Find and list all .webarchive files in the current directory and user's directory"""
@@ -326,6 +336,29 @@ def calculate_portfolio_statistics(df):
             stats['max_value'] = df['Value_numeric'].max()
             stats['min_value'] = df['Value_numeric'].min()
 
+            # New statistics
+            stats['median_value'] = df['Value_numeric'].median()
+            stats['std_dev'] = df['Value_numeric'].std()
+            stats['value_range'] = stats['max_value'] - stats['min_value']
+
+            # Calculate concentration metrics
+            df_sorted = df.sort_values('Value_numeric', ascending=False)
+            stats['top_5_pct'] = df_sorted.head(5)['Value_numeric'].sum() / stats['total_value'] * 100 if stats['count'] >= 5 else 100
+            stats['top_10_pct'] = df_sorted.head(10)['Value_numeric'].sum() / stats['total_value'] * 100 if stats['count'] >= 10 else 100
+
+            # Calculate Herfindahl-Hirschman Index (HHI) - measure of concentration
+            # HHI is the sum of squared percentages (0-10000 scale)
+            weights = (df['Value_numeric'] / stats['total_value']) * 100
+            stats['hhi'] = (weights ** 2).sum()
+
+            # Categorize HHI
+            if stats['hhi'] < 1500:
+                stats['concentration'] = "Low concentration"
+            elif stats['hhi'] < 2500:
+                stats['concentration'] = "Moderate concentration"
+            else:
+                stats['concentration'] = "High concentration"
+
             # Map the expected column names to their actual counterparts
             column_mapping = {
                 'Symbol': 'Ticker' if 'Ticker' in df.columns else None,
@@ -349,6 +382,12 @@ def calculate_portfolio_statistics(df):
 
             # Calculate percentage of total for each holding
             df_mapped['pct_of_total'] = df_mapped['Value_numeric'] / stats['total_value'] * 100
+
+            # Asset type classification if 'Category' column exists
+            if 'Category' in df_mapped.columns:
+                category_stats = df_mapped.groupby('Category')['Value_numeric'].sum().reset_index()
+                category_stats['pct_of_total'] = category_stats['Value_numeric'] / stats['total_value'] * 100
+                stats['asset_allocation'] = category_stats.sort_values('pct_of_total', ascending=False)
 
             # Use the mapped column names for the final dataframe
             cols_to_select = ['Name', 'Symbol', 'Value_numeric', 'pct_of_total']  # Swapped Name and Symbol order
@@ -401,8 +440,26 @@ def create_text_report(stats, df, output_file_base):
         file.write(f"Total Portfolio Value: ${stats['total_value']:,.2f}\n")
         file.write(f"Number of Holdings: {stats['count']}\n")
         file.write(f"Average Holding Value: ${stats['avg_value']:,.2f}\n")
+        file.write(f"Median Holding Value: ${stats['median_value']:,.2f}\n")
+        file.write(f"Standard Deviation: ${stats['std_dev']:,.2f}\n")
         file.write(f"Largest Holding: ${stats['max_value']:,.2f}\n")
-        file.write(f"Smallest Holding: ${stats['min_value']:,.2f}\n\n")
+        file.write(f"Smallest Holding: ${stats['min_value']:,.2f}\n")
+        file.write(f"Value Range: ${stats['value_range']:,.2f}\n\n")
+
+        # Concentration metrics
+        file.write("CONCENTRATION METRICS\n")
+        file.write("--------------------\n")
+        file.write(f"Top 5 Holdings: {stats['top_5_pct']:.2f}% of portfolio\n")
+        file.write(f"Top 10 Holdings: {stats['top_10_pct']:.2f}% of portfolio\n")
+        file.write(f"HHI Concentration Score: {stats['hhi']:.2f} ({stats['concentration']})\n\n")
+
+        # Asset allocation if available
+        if 'asset_allocation' in stats:
+            file.write("ASSET ALLOCATION\n")
+            file.write("----------------\n")
+            for idx, row in stats['asset_allocation'].iterrows():
+                file.write(f"{row['Category']}: {row['pct_of_total']:.2f}% (${row['Value_numeric']:,.2f})\n")
+            file.write("\n")
 
         # Top holdings
         file.write("TOP HOLDINGS\n")
@@ -601,15 +658,48 @@ def main():
                     with st.expander("Error details"):
                         st.code(stats['traceback'])
             else:
+                # Create three columns for better organization
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.subheader("Summary")
-                    st.metric(label="Total Portfolio Value", value=f"${stats['total_value']:,.2f}")
-                    st.metric(label="Number of Holdings", value=stats['count'])
-                    st.metric(label="Average Holding Value", value=f"${stats['avg_value']:,.2f}")
-                    st.metric(label="Largest Holding", value=f"${stats['max_value']:,.2f}")
-                    st.metric(label="Smallest Holding", value=f"${stats['min_value']:,.2f}")
+                    st.subheader("Summary Statistics")
+                    metrics_col1, metrics_col2 = st.columns(2)
+
+                    with metrics_col1:
+                        st.metric(label="Total Value", value=f"${stats['total_value']:,.2f}")
+                        st.metric(label="Holdings Count", value=stats['count'])
+                        st.metric(label="Average Value", value=f"${stats['avg_value']:,.2f}")
+                        st.metric(label="Median Value", value=f"${stats['median_value']:,.2f}")
+
+                    with metrics_col2:
+                        st.metric(label="Largest Holding", value=f"${stats['max_value']:,.2f}")
+                        st.metric(label="Smallest Holding", value=f"${stats['min_value']:,.2f}")
+                        st.metric(label="Value Range", value=f"${stats['value_range']:,.2f}")
+                        st.metric(label="Standard Deviation", value=f"${stats['std_dev']:,.2f}")
+
+                    # Concentration metrics
+                    st.subheader("Portfolio Concentration")
+                    metrics_col3, metrics_col4 = st.columns(2)
+
+                    with metrics_col3:
+                        st.metric(label="Top 5 Holdings", value=f"{stats['top_5_pct']:.2f}%")
+                        st.metric(label="HHI Score", value=f"{stats['hhi']:.2f}")
+
+                    with metrics_col4:
+                        st.metric(label="Top 10 Holdings", value=f"{stats['top_10_pct']:.2f}%")
+                        st.metric(label="Concentration", value=stats['concentration'])
+
+                # Asset allocation chart if available
+                if 'asset_allocation' in stats and not stats['asset_allocation'].empty:
+                    with st.expander("Asset Allocation", expanded=True):
+                        asset_data = stats['asset_allocation']
+                        st.bar_chart(asset_data.set_index('Category')['pct_of_total'])
+                        st.dataframe(
+                            asset_data[['Category', 'pct_of_total']].rename(
+                                columns={'pct_of_total': '% of Portfolio'}
+                            ).reset_index(drop=True),
+                            hide_index=True
+                        )
 
                 with col2:
                     st.subheader("Top Holdings")
@@ -634,12 +724,233 @@ def main():
                     # Create a table showing top holdings with percentages
                     # Increase the height of the dataframe to avoid scrolling
                     st.dataframe(
-                        display_data[['Name', 'Symbol', 'pct_of_total']].rename(  # Swapped Name and Symbol order
+                        display_data[['Name', 'Symbol', 'pct_of_total']].rename(
                             columns={'pct_of_total': '% of Portfolio'}
                         ).reset_index(drop=True),
                         hide_index=True,
                         height=420  # Set a fixed height that should accommodate 10-11 rows
                     )
+
+
+                # Add a new section for more charts
+                st.header("Portfolio Visualizations")
+
+                # Create tabs for different chart types
+                tabs = st.tabs(["Holdings Treemap", "Top 10 Bar Chart", "Value Distribution", "Portfolio Concentration"])
+
+                # Tab 1: Holdings Treemap - Shows hierarchical view of holdings
+                with tabs[0]:
+                    # Create a treemap of holdings
+                    treemap_data = display_data.copy()
+                    fig_treemap = px.treemap(
+                        treemap_data,
+                        path=['Symbol'],
+                        values='pct_of_total',
+                        color='Value_numeric',
+                        color_continuous_scale='Viridis',
+                        hover_data=['Name', 'Value_numeric'],
+                        title='Portfolio Holdings Treemap'
+                    )
+                    fig_treemap.update_layout(
+                        height=600,
+                        margin=dict(t=50, l=25, r=25, b=25)
+                    )
+                    st.plotly_chart(fig_treemap, use_container_width=True)
+                    st.caption("Treemap visualization shows each holding sized by percentage of portfolio with color intensity based on value.")
+
+                # Tab 2: Top 10 Bar Chart
+                with tabs[1]:
+                    # Create horizontal bar chart of top holdings
+                    top10_data = stats['holdings_pct'].head(10).copy()
+                    top10_data = top10_data.sort_values('pct_of_total')
+
+                    fig_bar = go.Figure(go.Bar(
+                        x=top10_data['pct_of_total'],
+                        y=top10_data['Name'] + " (" + top10_data['Symbol'] + ")",
+                        orientation='h',
+                        marker=dict(
+                            color=top10_data['pct_of_total'],
+                            colorscale='Viridis'
+                        ),
+                        text=[f"${v:,.2f}" for v in top10_data['Value_numeric']],
+                        textposition='auto'
+                    ))
+                    fig_bar.update_layout(
+                        title='Top 10 Holdings by Portfolio Percentage',
+                        xaxis_title='Percentage of Portfolio',
+                        yaxis_title='Holdings',
+                        height=500,
+                        margin=dict(l=250, r=50)  # Increase left margin for longer holding names
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                # Tab 3: Value Distribution Histogram
+                with tabs[2]:
+                    # Create a histogram of holding values
+                    # Filter out extreme outliers for better visualization
+                    q1 = np.percentile(df['Value_numeric'], 25)
+                    q3 = np.percentile(df['Value_numeric'], 75)
+                    iqr = q3 - q1
+                    upper_bound = q3 + 2.5 * iqr  # Less strict than 1.5*IQR to include more data
+
+                    filtered_values = df[df['Value_numeric'] <= upper_bound]['Value_numeric']
+
+                    fig_hist = px.histogram(
+                        filtered_values,
+                        nbins=20,
+                        title='Distribution of Holding Values',
+                        labels={'value': 'Holding Value ($)', 'count': 'Number of Holdings'},
+                        color_discrete_sequence=['lightblue'],
+                    )
+                    fig_hist.update_layout(
+                        showlegend=False,
+                        height=500
+                    )
+                    st.plotly_chart(fig_hist, use_container_width=True)
+
+                    # Add descriptive statistics
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Mean Value", f"${stats['avg_value']:,.2f}")
+                    col2.metric("Median Value", f"${stats['median_value']:,.2f}")
+                    col3.metric("Standard Deviation", f"${stats['std_dev']:,.2f}")
+
+                    if upper_bound < stats['max_value']:
+                        st.info(f"Note: Some holdings with values greater than ${upper_bound:,.2f} were excluded from the histogram for better visualization.")
+
+                # Tab 4: Portfolio Concentration Analysis
+                with tabs[3]:
+                    # Create data for Lorenz curve (measure of inequality in portfolio distribution)
+                    lorenz_data = stats['holdings_pct'].copy().sort_values('Value_numeric')
+                    lorenz_data['cumulative_pct'] = lorenz_data['Value_numeric'].cumsum() / stats['total_value'] * 100
+                    lorenz_data['holding_pct'] = 100 * (np.arange(1, len(lorenz_data) + 1) / len(lorenz_data))
+
+                    # Create Lorenz curve
+                    fig_lorenz = go.Figure()
+
+                    # Add perfect equality line (diagonal)
+                    fig_lorenz.add_trace(go.Scatter(
+                        x=[0, 100],
+                        y=[0, 100],
+                        mode='lines',
+                        name='Perfect Equality',
+                        line=dict(color='black', dash='dash')
+                    ))
+
+                    # Add Lorenz curve
+                    fig_lorenz.add_trace(go.Scatter(
+                        x=lorenz_data['holding_pct'].tolist(),
+                        y=lorenz_data['cumulative_pct'].tolist(),
+                        mode='lines',
+                        name='Portfolio Distribution',
+                        fill='tozeroy',
+                        line=dict(color='blue')
+                    ))
+
+                    fig_lorenz.update_layout(
+                        title='Portfolio Concentration Analysis (Lorenz Curve)',
+                        xaxis_title='Cumulative % of Holdings',
+                        yaxis_title='Cumulative % of Portfolio Value',
+                        height=500
+                    )
+                    st.plotly_chart(fig_lorenz, use_container_width=True)
+
+                    # Explanation of the Lorenz curve
+                    st.caption("""
+                    **Interpreting the Lorenz Curve:**
+                    - The diagonal line represents perfect equality (all holdings have equal value)
+                    - The curve shows actual distribution of your portfolio
+                    - The greater the distance between the curve and diagonal, the more concentrated your portfolio
+                    - A concentrated portfolio may have higher risk due to lack of diversification
+                    """)
+
+                    # Add Gini coefficient (measure of inequality) if we have enough holdings
+                    if len(lorenz_data) > 5:
+                        # Calculate approximate Gini coefficient from Lorenz curve data
+                        x = lorenz_data['holding_pct'].values / 100
+                        y = lorenz_data['cumulative_pct'].values / 100
+                        x = np.insert(x, 0, 0)
+                        y = np.insert(y, 0, 0)
+                        B = np.trapz(y, x)
+                        gini = 1 - 2 * B
+
+                        st.metric(
+                            "Portfolio Gini Coefficient",
+                            f"{gini:.2f}",
+                            help="Measures inequality in your portfolio. Values range from 0 (perfect equality) to 1 (perfect inequality)."
+                        )
+
+                        # Interpret Gini coefficient
+                        if gini < 0.2:
+                            concentration = "Very Low"
+                        elif gini < 0.4:
+                            concentration = "Low"
+                        elif gini < 0.6:
+                            concentration = "Moderate"
+                        elif gini < 0.8:
+                            concentration = "High"
+                        else:
+                            concentration = "Very High"
+
+                        st.info(f"Your portfolio has a **{concentration}** concentration level based on the Gini coefficient.")
+
+                        st.markdown("""
+                        ### 📘 Understanding Gini vs HHI
+
+                        **Gini Coefficient**
+                        - Measures overall *inequality* in your portfolio.
+                        - Sensitive to **all holdings**, including small ones.
+                        - A high Gini (close to 1) means a few holdings make up most of the portfolio, with many very small ones.
+
+                        **HHI (Herfindahl-Hirschman Index)**
+                        - Measures *concentration* using squared percentage weights.
+                        - Focuses more on **large holdings**.
+                        - A low HHI means no single holding dominates—even if many others are small.
+
+                        🧠 **Why they can differ:**
+                        You might have a few large holdings and many tiny ones.
+                        Gini will say "high inequality", while HHI might still say "low concentration".
+
+                        Both are useful — Gini shows diversification risk; HHI shows exposure to dominant assets.
+                        """)
+
+                # Asset allocation section - if available, AFTER the tabs
+                if 'asset_allocation' in stats and not stats['asset_allocation'].empty:
+                    st.header("Asset Allocation")
+                    asset_data = stats['asset_allocation']
+
+                    # Create pie chart for asset allocation
+                    fig_asset = px.pie(
+                        asset_data,
+                        values='pct_of_total',
+                        names='Category',
+                        title='Asset Allocation by Category',
+                        hover_data=['Value_numeric'],
+                        labels={'Value_numeric': 'Value ($)'},
+                        color_discrete_sequence=px.colors.qualitative.Bold
+                    )
+                    fig_asset.update_traces(textposition='inside', textinfo='percent+label')
+                    fig_asset.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
+
+                    # Create bar chart for asset allocation
+                    fig_asset_bar = px.bar(
+                        asset_data,
+                        x='Category',
+                        y='pct_of_total',
+                        title='Asset Allocation by Category',
+                        text_auto=True,
+                        labels={'pct_of_total': 'Percentage of Portfolio', 'Category': 'Asset Category'},
+                        color='Category',
+                        color_discrete_sequence=px.colors.qualitative.Bold
+                    )
+
+                    # Use columns to display charts side by side
+                    asset_col1, asset_col2 = st.columns(2)
+
+                    with asset_col1:
+                        st.plotly_chart(fig_asset, use_container_width=True)
+
+                    with asset_col2:
+                        st.plotly_chart(fig_asset_bar, use_container_width=True)
 
     else:
         # Show detailed instructions when no file is processed yet
