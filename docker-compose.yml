@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8505:8505"  # Streamlit
+    volumes:
+      - .:/app:rw    # Mount current directory for production
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
