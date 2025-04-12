@@ -1,20 +1,7 @@
 numpy
-# Install pandas after numpy is already installed
 pandas
-openpyxl
-scipy
-tqdm
-matplotlib
-yfinance
-twelvedata
 streamlit
-dash
-dash-bootstrap-components
-werkzeug
+BeautifulSoup4
+matplotlib
 xlsxwriter
-plotly
-kaleido
-openai
 tabulate
-diskcache
-anthropic
