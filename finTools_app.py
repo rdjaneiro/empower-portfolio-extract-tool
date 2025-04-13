@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Empower Portfolio WebArchive Extractor
+Empower Portfolio Extractor
 Copyright (C) 2025 Rodrigo Loureiro
 
 This program is free software: you can redistribute it and/or modify
@@ -16,16 +16,16 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Empower Portfolio WebArchive Extractor
+# Empower Portfolio Extractor
 =======================================
 
 ## Overview
 This Streamlit app extracts portfolio holdings data from Empower retirement account
-webarchive files (.webarchive format) and converts them to both human-readable text
+files (.webarchive or .mhtml/.mht format) and converts them to both human-readable text
 and CSV format for further analysis.
 
 ## Inputs
-- .webarchive files containing Empower retirement account portfolio information
+- .webarchive or .mhtml/.mht files containing Empower retirement account portfolio information
 - Files can be either uploaded by the user or selected from available files in the current directory
 
 ## Outputs
@@ -35,18 +35,15 @@ and CSV format for further analysis.
 
 ## Usage Instructions
 1. Launch the app by running `streamlit run finTools_app.py`
-2. Choose whether to upload a new .webarchive file or select an existing one
-3. Configure extraction options:
-   - Extract Portfolio Holdings: Parse and structure the portfolio data
-   - Generate CSV File: Save the extracted data as a CSV file
-   - Show Full Extracted Text: Display the raw text content of the webarchive
-4. Click "Process WebArchive File" to start the extraction
-5. View the results and download the CSV file if needed
+2. Upload your .webarchive or .mhtml file
+3. Click Process and view the results
+4. Download your processed data in various formats
 
 ## Dependencies
 - streamlit: Web interface
 - pandas: Data manipulation
 - read_empower_webarchive: Custom module for webarchive processing
+- read_empower_mhtml: Custom module for mhtml processing
 
 """
 
@@ -75,12 +72,19 @@ import plotly.graph_objects as go
 import plotly.figure_factory as ff
 import numpy as np
 
-# Import functions from the read_empower_webarchive script after other standard imports
+# Import functions from both the webarchive and mhtml modules
 from read_empower_webarchive import (
-    extract_webarchive_text,
-    extract_portfolio_holdings,
-    save_holdings_to_csv,
-    format_holdings_as_text
+    extract_webarchive_text as extract_webarchive_text_wa,
+    extract_portfolio_holdings as extract_portfolio_holdings_wa,
+    save_holdings_to_csv as save_holdings_to_csv_wa,
+    format_holdings_as_text as format_holdings_as_text_wa
+)
+
+from read_empower_mhtml import (
+    extract_mhtml_text as extract_mhtml_text_mht,
+    extract_portfolio_holdings as extract_portfolio_holdings_mht,
+    save_holdings_to_csv as save_holdings_to_csv_mht,
+    format_holdings_as_text as format_holdings_as_text_mht
 )
 
 # Initialize session state variables
@@ -111,7 +115,6 @@ def ensure_user_dirs():
     return user_dir
 
 # Add this function after the ensure_user_dirs function
-
 def cleanup_old_sessions():
     """Delete user session directories that are older than 24 hours"""
     user_files_dir = os.path.join(os.getcwd(), "user_files")
@@ -155,15 +158,18 @@ def ensure_user_files_dir():
     """Get the user-specific directory path"""
     return ensure_user_dirs()
 
-def get_available_webarchive_files():
-    """Find and list all .webarchive files in the current directory and user's directory"""
+def get_available_files():
+    """Find and list all .webarchive, .mhtml, and .mht files in the current directory and user's directory"""
     # Check both current directory and user-specific directory
-    current_dir_files = glob.glob("*.webarchive")
+    current_dir_webarchives = glob.glob("*.webarchive")
+    current_dir_mhtml = glob.glob("*.mhtml") + glob.glob("*.mht")
+
     user_dir = ensure_user_files_dir()
-    user_dir_files = glob.glob(os.path.join(user_dir, "*.webarchive"))
+    user_dir_webarchives = glob.glob(os.path.join(user_dir, "*.webarchive"))
+    user_dir_mhtml = glob.glob(os.path.join(user_dir, "*.mhtml")) + glob.glob(os.path.join(user_dir, "*.mht"))
 
     # Return full paths for both sets of files
-    return current_dir_files + user_dir_files
+    return current_dir_webarchives + current_dir_mhtml + user_dir_webarchives + user_dir_mhtml
 
 def save_raw_data_to_file(text, file_path_base):
     """Save raw extracted text to a file with _rawdata suffix"""
@@ -203,15 +209,15 @@ def render_sidebar():
 
         st.markdown("""
         ### Instructions:
-        1. Upload your .webarchive file
+        1. Upload your .webarchive or .mhtml file
         2. Click Process and view the results
         """)
 
-        # File upload section - no more selection method choice
+        # File upload section - now accepts both .webarchive and .mhtml/.mht
         st.header("Step 1: Upload File")
 
         file_path = None
-        uploaded_file = st.file_uploader("Upload a .webarchive file", type=["webarchive"])
+        uploaded_file = st.file_uploader("Upload a file", type=["webarchive", "mhtml", "mht"])
         if uploaded_file:
             # Save the uploaded file to user-specific directory
             user_dir = ensure_user_files_dir()
@@ -222,7 +228,7 @@ def render_sidebar():
 
         # Process button
         st.header("Step 2: Process")
-        process_button = st.button("Process WebArchive File")
+        process_button = st.button("Process File")
 
     # Return all the user inputs from the sidebar
     # Always set extract_portfolio and save_csv to True
@@ -234,10 +240,39 @@ def render_sidebar():
         "process_button": process_button
     }
 
-def process_webarchive(file_path, extract_portfolio=True, save_csv=True):
-    """Process a webarchive file and return the extracted data"""
-    # Extract text content
-    extracted_text = extract_webarchive_text(file_path)
+def determine_file_type(file_path):
+    """Determine if a file is webarchive or mhtml based on extension"""
+    _, extension = os.path.splitext(file_path)
+    extension = extension.lower()
+
+    if extension == '.webarchive':
+        return 'webarchive'
+    elif extension in ['.mhtml', '.mht']:
+        return 'mhtml'
+    else:
+        return None
+
+def process_file(file_path, extract_portfolio=True, save_csv=True):
+    """Process a file (either webarchive or mhtml) and return the extracted data"""
+    # Determine file type
+    file_type = determine_file_type(file_path)
+
+    if not file_type:
+        return {
+            "success": False,
+            "error": f"Unsupported file format. Please use .webarchive or .mhtml/.mht files.",
+            "text": None,
+            "holdings": None,
+            "csv_path": None,
+            "raw_data_path": None,
+            "text_path": None
+        }
+
+    # Extract text content based on file type
+    if file_type == 'webarchive':
+        extracted_text = extract_webarchive_text_wa(file_path)
+    else:  # mhtml
+        extracted_text = extract_mhtml_text_mht(file_path)
 
     if not extracted_text or extracted_text.startswith("Error"):
         return {
@@ -247,7 +282,8 @@ def process_webarchive(file_path, extract_portfolio=True, save_csv=True):
             "holdings": None,
             "csv_path": None,
             "raw_data_path": None,
-            "text_path": None
+            "text_path": None,
+            "file_type": file_type
         }
 
     # Save raw data to file
@@ -262,7 +298,12 @@ def process_webarchive(file_path, extract_portfolio=True, save_csv=True):
     report_path = None
 
     if extract_portfolio:
-        holdings_data = extract_portfolio_holdings(extracted_text)
+        # Extract portfolio holdings based on file type
+        if file_type == 'webarchive':
+            holdings_data = extract_portfolio_holdings_wa(extracted_text)
+        else:  # mhtml
+            holdings_data = extract_portfolio_holdings_mht(extracted_text)
+
         if isinstance(holdings_data, str) and holdings_data.startswith("Could not"):
             return {
                 "success": False,
@@ -271,14 +312,19 @@ def process_webarchive(file_path, extract_portfolio=True, save_csv=True):
                 "holdings": None,
                 "csv_path": None,
                 "raw_data_path": raw_data_path,
-                "text_path": None
+                "text_path": None,
+                "file_type": file_type
             }
 
-        # Save as CSV if requested
+        # Save as CSV if requested (both functions should work the same way)
         if save_csv:
             user_dir = ensure_user_files_dir()
             csv_path = os.path.join(user_dir, f"{output_file_base}.csv")
-            save_holdings_to_csv(holdings_data, csv_path)
+
+            if file_type == 'webarchive':
+                save_holdings_to_csv_wa(holdings_data, csv_path)
+            else:  # mhtml
+                save_holdings_to_csv_mht(holdings_data, csv_path)
 
             # Create MorningStar CSV if possible
             df = pd.read_csv(csv_path)
@@ -292,7 +338,12 @@ def process_webarchive(file_path, extract_portfolio=True, save_csv=True):
         # Generate formatted text file
         user_dir = ensure_user_files_dir()
         text_path = os.path.join(user_dir, f"{output_file_base}.txt")
-        formatted_text = format_holdings_as_text(holdings_data)
+
+        if file_type == 'webarchive':
+            formatted_text = format_holdings_as_text_wa(holdings_data)
+        else:  # mhtml
+            formatted_text = format_holdings_as_text_mht(holdings_data)
+
         with open(text_path, "w", encoding="utf-8") as file:
             file.write(formatted_text)
 
@@ -305,7 +356,8 @@ def process_webarchive(file_path, extract_portfolio=True, save_csv=True):
         "raw_data_path": raw_data_path,
         "text_path": text_path,
         "morningstar_path": morningstar_path,
-        "report_path": report_path
+        "report_path": report_path,
+        "file_type": file_type
     }
 
 def read_csv_to_dataframe(csv_path):
@@ -505,7 +557,7 @@ def main():
     process_button = sidebar_inputs["process_button"]
 
     # Process file only if button clicked and file path provided or if we already have results
-    process_file = False
+    process_file_flag = False
 
     if file_path and process_button:
         # Clean up old sessions before processing new file
@@ -513,13 +565,17 @@ def main():
             cleanup_old_sessions()
 
         # New file to process
-        process_file = True
+        process_file_flag = True
         st.session_state.processed_file_path = file_path
 
     # Display results if we have processed data
-    if process_file:
-        with st.spinner("Processing file..."):
-            result = process_webarchive(
+    if process_file_flag:
+        # Determine file type and display it
+        file_type = determine_file_type(file_path)
+        file_type_display = "WebArchive" if file_type == 'webarchive' else "MHTML"
+
+        with st.spinner(f"Processing {file_type_display} file..."):
+            result = process_file(
                 file_path=file_path,
                 extract_portfolio=extract_portfolio,
                 save_csv=save_csv
@@ -531,7 +587,11 @@ def main():
     result = st.session_state.processed_result
 
     if result and result.get("success", False):
-        st.success("File processed successfully!")
+        # Get file type for display
+        file_type = result.get("file_type", "unknown")
+        file_type_display = "WebArchive" if file_type == 'webarchive' else "MHTML" if file_type == 'mhtml' else "File"
+
+        st.success(f"{file_type_display} processed successfully!")
 
         # Display portfolio holdings
         if result["holdings"]:
@@ -953,26 +1013,22 @@ def main():
                         st.plotly_chart(fig_asset_bar, use_container_width=True)
 
     else:
-        # Show detailed instructions when no file is processed yet
-        st.title("Empower Portfolio Extractor")
-
+        # No file processed yet, show instructions
         st.markdown("""
-        ### How to Use This Tool:
-
+        ### Empower Portfolio Extractor
         1. **Get your portfolio data from Empower**:
            - Log in to your Empower Personal Dashboard account at [home.personalcapital.com](https://home.personalcapital.com)
            - Navigate to **Investing** → **Holdings** in the main menu
-           - Wait for your portfolio holdings to fully load on the page
-           - Exact process depends on your browser, but generally:
-           - **Right-click** anywhere on the holdings section of the page
-           - Select **Save Page As** from the context menu
-           - In the save dialog, change the format to **Web Archive (.webarchive)**
-           - Always choose **Web Archive** format, not **HTML**
-           - Save the file to your computer
+           - **For Safari users**:
+             - Right-click and select "Save As"
+             - Choose "Web Archive" format (.webarchive)
+           - **For Chrome/Edge/Firefox users**:
+             - Right-click and select "Save As" or "Save Page As"
+             - Choose "Web Page, Complete" or "MHTML" format (.mhtml)
 
         2. **Process your data**:
-           - Upload the .webarchive file using the file uploader in the sidebar ←
-           - Click **Process WebArchive File** button
+           - Upload the saved file using the file uploader in the sidebar ←
+           - Click **Process File** button
            - View your holdings data and download various file formats
 
         3. **Download options**:
@@ -980,6 +1036,50 @@ def main():
            - MorningStar CSV - Compatible with MorningStar's portfolio analyzer
            - Text Report - Detailed portfolio analysis text report
         """)
+
+        # Add tabs for different browser instructions
+        browser_tabs = st.tabs(["Safari", "Chrome", "Edge", "Firefox"])
+
+        with browser_tabs[0]:
+            st.subheader("Safari Instructions")
+            st.markdown("""
+            1. Navigate to your Empower portfolio page
+            2. From the menu bar, select **File** → **Save As**
+            3. In the save dialog, select format: **Web Archive (.webarchive)**
+            4. Choose a location and save
+            5. Upload the .webarchive file using the sidebar
+            """)
+
+        with browser_tabs[1]:
+            st.subheader("Chrome Instructions")
+            st.markdown("""
+            1. Navigate to your Empower portfolio page
+            2. Press **Ctrl+S** (Windows) or **⌘+S** (Mac)
+            3. In the save dialog, change "Save as type" to **Webpage, Complete (.mhtml)**
+            4. Choose a location and save
+            5. Upload the .mhtml file using the sidebar
+            """)
+
+        with browser_tabs[2]:
+            st.subheader("Edge Instructions")
+            st.markdown("""
+            1. Navigate to your Empower portfolio page
+            2. Press **Ctrl+S** (Windows) or **⌘+S** (Mac)
+            3. In the save dialog, change "Save as type" to **Webpage, Complete (.mhtml)**
+            4. Choose a location and save
+            5. Upload the .mhtml file using the sidebar
+            """)
+
+        with browser_tabs[3]:
+            st.subheader("Firefox Instructions")
+            st.markdown("""
+            1. Navigate to your Empower portfolio page
+            2. Press **Ctrl+S** (Windows) or **⌘+S** (Mac)
+            3. In the save dialog, change "Save as" to **Web Page, complete**
+            4. This will create an HTML file and a folder - you'll need to manually combine them into MHTML format
+            5. Alternatively, install the "Save Page WE" add-on to save as MHTML directly
+            6. Upload the .mhtml file using the sidebar
+            """)
 
         # Add some helpful tips
         st.info("💡 **Tip**: This tool works entirely in your browser - your financial data never leaves your computer.")
