@@ -6,3 +6,7 @@ matplotlib
 xlsxwriter
 tabulate
 plotly
+dotenv
+openai
+anthropic
+diskcache

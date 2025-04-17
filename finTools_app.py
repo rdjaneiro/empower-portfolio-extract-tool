@@ -87,6 +87,8 @@ from read_empower_mhtml import (
     format_holdings_as_text as format_holdings_as_text_mht
 )
 
+from llm_helpers import send_query_to_llm
+
 # Initialize session state variables
 if 'processed_result' not in st.session_state:
     st.session_state.processed_result = None
@@ -583,6 +585,9 @@ def main():
             # Store result in session state
             st.session_state.processed_result = result
 
+        # Show toast only after processing a new file
+        st.toast(f"{file_type_display} processed successfully!  ✅")
+
     # Use stored result if available
     result = st.session_state.processed_result
 
@@ -591,46 +596,67 @@ def main():
         file_type = result.get("file_type", "unknown")
         file_type_display = "WebArchive" if file_type == 'webarchive' else "MHTML" if file_type == 'mhtml' else "File"
 
-        st.success(f"{file_type_display} processed successfully!")
+        # --- LLM Portfolio Review Button --- (Move this section above Portfolio Holdings)
+        # Read data from CSV file for display
+        df = None
+        if result["csv_path"]:
+            df = read_csv_to_dataframe(result["csv_path"])
+
+            # If needed, reorder columns to make sure Name comes before Ticker
+            if df is not None and 'Name' in df.columns and 'Ticker' in df.columns:
+                cols = df.columns.tolist()
+                name_index = cols.index('Name')
+                ticker_index = cols.index('Ticker')
+
+                if ticker_index < name_index:  # If Ticker appears before Name
+                    # Reorder the columns to put Name before Ticker
+                    cols.remove('Name')
+                    cols.insert(ticker_index, 'Name')
+                    df = df[cols]
+
+        if df is None:
+            # Fallback to the holdings data if CSV couldn't be read
+            df = pd.DataFrame(result["holdings"])
+            # Make sure Name column comes before Ticker if both exist
+            if 'Name' in df.columns and 'Ticker' in df.columns:
+                # Get all column names
+                cols = df.columns.tolist()
+                # Remove both columns
+                cols.remove('Name')
+                cols.remove('Ticker')
+                # Add them back in the desired order
+                cols.insert(0, 'Ticker')
+                cols.insert(0, 'Name')
+                # Reorder the dataframe
+                df = df[cols]
+
+        # --- LLM Portfolio Review Button (now above Portfolio Holdings) ---
+        st.subheader("Portfolio Review by AI")
+        stats = calculate_portfolio_statistics(df)
+        if st.button("Ask AI for Portfolio Insights", key="llm_review_btn"):
+            with st.spinner("AI is reviewing your portfolio..."):
+                llm_prompt = (
+                    "You are a financial portfolio expert. "
+                    "Review the following portfolio holdings and statistics. "
+                    "Provide a concise, actionable assessment of the portfolio's quality, diversification, risks, and suggest improvements. "
+                    "Here is the data:\n\n"
+                    f"Holdings (top 10):\n{df.head(10).to_string(index=False)}\n\n"
+                    f"Portfolio statistics:\n{stats}\n"
+                )
+                system_message = (
+                    "You are a helpful assistant that provides expert financial portfolio analysis. "
+                    "Be concise, actionable, and clear for a general audience."
+                )
+                llm_response = send_query_to_llm(
+                    query=llm_prompt,
+                    system_message=system_message
+                )
+                st.success("AI Portfolio Review:")
+                st.write(llm_response)
 
         # Display portfolio holdings
         if result["holdings"]:
             st.header("Portfolio Holdings")
-
-            # Read data from CSV file for display
-            df = None
-            if result["csv_path"]:
-                df = read_csv_to_dataframe(result["csv_path"])
-
-                # If needed, reorder columns to make sure Name comes before Ticker
-                if df is not None and 'Name' in df.columns and 'Ticker' in df.columns:
-                    cols = df.columns.tolist()
-                    name_index = cols.index('Name')
-                    ticker_index = cols.index('Ticker')
-
-                    if ticker_index < name_index:  # If Ticker appears before Name
-                        # Reorder the columns to put Name before Ticker
-                        cols.remove('Name')
-                        cols.insert(ticker_index, 'Name')
-                        df = df[cols]
-
-            if df is None:
-                # Fallback to the holdings data if CSV couldn't be read
-                df = pd.DataFrame(result["holdings"])
-                # Make sure Name column comes before Ticker if both exist
-                if 'Name' in df.columns and 'Ticker' in df.columns:
-                    # Get all column names
-                    cols = df.columns.tolist()
-                    # Remove both columns
-                    cols.remove('Name')
-                    cols.remove('Ticker')
-                    # Add them back in the desired order
-                    cols.insert(0, 'Ticker')
-                    cols.insert(0, 'Name')
-                    # Reorder the dataframe
-                    df = df[cols]
-
-            # Display the dataframe without any formatting - exactly as it appears in the CSV
             st.dataframe(df, hide_index=True)
 
             # Move download buttons here - right after displaying the holdings table
